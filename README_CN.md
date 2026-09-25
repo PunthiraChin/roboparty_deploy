@@ -329,7 +329,18 @@ screen -S joy_session -X quit
 ./tools/start_robot.sh --robot rpo --policy getup
 ./tools/start_robot.sh --robot rpo --policy interrupt
 ./tools/start_robot.sh --robot rpo --policy parkour
+./tools/start_robot.sh --robot rpo --policy sawasdee
 ```
+
+`sawasdee` 配置将默认行走策略与训练好的屈膝 Sawasdee 动作策略组合在一起。
+在连接机器人硬件之前，请先离线验证策略和动作文件：
+
+```bash
+python3 src/inference/tools/validate_motion_policy.py
+```
+
+运行契约、手柄操作和自动技能选择的安全边界请参阅
+`src/inference/robots/rpo/SAWASDEE.md`。
 
 `parkour` 依赖 `/depth_obs` 深度观测。启动机器人推理前，请先在另一个终端启动 RealSense 与深度处理：
 
