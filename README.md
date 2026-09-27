@@ -149,7 +149,21 @@ To facilitate debugging without an Ethernet cable and monitor, a WiFi Access Poi
    sudo cp tools/create_ap/create_ap_sunrise.conf /etc/create_ap.conf
    ```
 
-   > **Description**: Under the default configuration, the hotspot name (`SSID`) is **`atom`** and the password (`PASSPHRASE`) is **`jujujuju`**. To customize the hotspot name or password, you can edit the `/etc/create_ap.conf` file and modify the corresponding fields.
+   > **Security requirement**: the bundled configuration contains a public
+   > example credential. **Do not enable the AP with that credential.** Generate
+   > a unique passphrase of at least 16 characters for each robot, then replace
+   > `SSID` and `PASSPHRASE` in `/etc/create_ap.conf` before continuing:
+   >
+   > ```bash
+   > openssl rand -base64 24
+   > sudoedit /etc/create_ap.conf
+   > ```
+   >
+   > ROS 2 DDS discovery and the motor-control services are not authenticated by
+   > this setup. Treat the AP as a trusted, isolated control network and share
+   > its passphrase only with robot operators. `tools/start_robot.sh` refuses to
+   > start while the AP is active with the public default or a passphrase shorter
+   > than 16 characters.
 
 4. Enable autostart on boot and start the hotspot immediately:
 
@@ -344,19 +358,21 @@ If you need to switch to a different policy model, pass the `policy` argument. I
 ./tools/start_robot.sh --robot rpo --policy getup
 ./tools/start_robot.sh --robot rpo --policy interrupt
 ./tools/start_robot.sh --robot rpo --policy parkour
-./tools/start_robot.sh --robot rpo --policy sawasdee
 ```
 
 The `sawasdee` configuration pairs the stock locomotion controller with the
-trained knee-bend Sawasdee policy. Before using robot hardware, validate the
-policy and motion bundle offline:
+trained knee-bend Sawasdee policy, but it is currently marked
+`hardware_validated: false`. The physical launcher rejects it, and the
+inference runtime independently blocks motor initialization and inference.
+Validate the policy and motion bundle offline with:
 
 ```bash
 python3 src/inference/tools/validate_motion_policy.py
 ```
 
-See `src/inference/robots/rpo/SAWASDEE.md` for the runtime contract, gamepad
-flow, and the safety boundary for future autonomous skill selection.
+See `src/inference/robots/rpo/SAWASDEE.md` for the runtime contract, evidence
+required before hardware approval, and the safety boundary for future
+autonomous skill selection.
 
 `parkour` depends on the `/depth_obs` observation. Before starting robot inference, launch RealSense and depth processing in another terminal:
 

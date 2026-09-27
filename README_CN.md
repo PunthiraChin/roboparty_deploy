@@ -134,7 +134,18 @@
    sudo cp tools/create_ap/create_ap_sunrise.conf /etc/create_ap.conf
    ```
 
-   > **说明**：默认配置下的热点名称（`SSID`）为 **`atom`**，连接密码（`PASSPHRASE`）为 **`jujujuju`**。如需自定义热点名称或密码，可编辑 `/etc/create_ap.conf` 文件并修改对应的字段。
+   > **安全要求**：仓库内配置包含公开的示例凭据，**禁止直接使用该凭据启用热点**。
+   > 请为每台机器人生成至少 16 位的唯一密码，并在继续前修改
+   > `/etc/create_ap.conf` 中的 `SSID` 和 `PASSPHRASE`：
+   >
+   > ```bash
+   > openssl rand -base64 24
+   > sudoedit /etc/create_ap.conf
+   > ```
+   >
+   > 当前 ROS 2 DDS 发现与电机控制服务本身不提供身份认证。请将热点视为隔离的可信
+   > 控制网络，并仅向机器人操作人员提供密码。当热点使用公开默认密码或少于 16 位的
+   > 密码时，`tools/start_robot.sh` 会拒绝启动。
 
 4. 开启开机自启并立即启动热点：
 
@@ -329,17 +340,17 @@ screen -S joy_session -X quit
 ./tools/start_robot.sh --robot rpo --policy getup
 ./tools/start_robot.sh --robot rpo --policy interrupt
 ./tools/start_robot.sh --robot rpo --policy parkour
-./tools/start_robot.sh --robot rpo --policy sawasdee
 ```
 
 `sawasdee` 配置将默认行走策略与训练好的屈膝 Sawasdee 动作策略组合在一起。
-在连接机器人硬件之前，请先离线验证策略和动作文件：
+目前该配置标记为 `hardware_validated: false`。物理机器人启动脚本会拒绝它，
+推理运行时也会独立阻止电机初始化和推理。请先离线验证策略和动作文件：
 
 ```bash
 python3 src/inference/tools/validate_motion_policy.py
 ```
 
-运行契约、手柄操作和自动技能选择的安全边界请参阅
+运行契约、硬件批准前所需的验证证据和自动技能选择的安全边界请参阅
 `src/inference/robots/rpo/SAWASDEE.md`。
 
 `parkour` 依赖 `/depth_obs` 深度观测。启动机器人推理前，请先在另一个终端启动 RealSense 与深度处理：

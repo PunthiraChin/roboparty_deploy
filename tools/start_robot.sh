@@ -40,6 +40,53 @@ validate_name() {
     fi
 }
 
+# The ROS 2 graph exposes motor-control services to every participant on the
+# DDS network. Refuse to start the runtime when the bundled public AP password
+# is active, or when the configured passphrase is too short to be a reasonable
+# network boundary. This check never prints the passphrase.
+validate_ap_security() {
+    if ! command -v systemctl >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet create_ap.service; then
+        return 0
+    fi
+
+    local ap_config="${CREATE_AP_CONFIG_PATH:-/etc/create_ap.conf}"
+    if [ ! -r "$ap_config" ]; then
+        print_error "create_ap 正在运行，但无法读取热点配置: $ap_config"
+        print_error "请先设置每台机器人唯一的强密码，再启动机器人运行时。"
+        exit 1
+    fi
+
+    local passphrase
+    passphrase=$(sed -n 's/^[[:space:]]*PASSPHRASE[[:space:]]*=[[:space:]]*//p' "$ap_config" | tail -n 1)
+    passphrase="${passphrase#\"}"
+    passphrase="${passphrase%\"}"
+    passphrase="${passphrase#\'}"
+    passphrase="${passphrase%\'}"
+
+    if [ -z "$passphrase" ] || [ "$passphrase" = "jujujuju" ] || [ "${#passphrase}" -lt 16 ]; then
+        print_error "检测到公开默认或过短的热点密码；拒绝启动机器人运行时。"
+        print_error "请编辑 $ap_config，设置每台机器人唯一且至少 16 位的密码。"
+        exit 1
+    fi
+
+    print_success "热点安全检查通过（未显示密码）。"
+}
+
+# This launcher is the normal physical-robot path, so it only accepts complete
+# profiles that explicitly record supervised hardware validation. Offline and
+# simulation-only profiles must use their dedicated validation/demo commands.
+validate_policy_hardware_gate() {
+    local policy_config="$1"
+    local validation_value
+    validation_value=$(awk '$1 == "hardware_validated:" { print tolower($2); exit }' "$policy_config")
+    if [ "$validation_value" != "true" ]; then
+        print_error "策略未通过物理硬件验证；拒绝启动机器人运行时: $policy_config"
+        print_error "请先完成离线、仿真和有人监督的硬件验证。"
+        exit 1
+    fi
+}
+
 ROBOT="rpo"
 POLICY="default"
 ROBOT_SET=0
@@ -212,6 +259,9 @@ if [ ! -f "$ROBOT_DIR/configs/$POLICY_FILE" ]; then
     print_error "推理配置不存在: $ROBOT_DIR/configs/$POLICY_FILE"
     exit 1
 fi
+
+validate_policy_hardware_gate "$ROBOT_DIR/configs/$POLICY_FILE"
+validate_ap_security
 
 print_info "选择机器人: $ROBOT"
 print_info "选择策略: $POLICY"
