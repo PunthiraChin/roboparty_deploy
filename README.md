@@ -24,6 +24,21 @@ Open-source repository: [https://github.com/Roboparty/roboparty_deploy](https://
 - **Isolation**: Different functions are implemented by different packages, supporting the addition of custom function packages.
 - **Long-term Support**: This repository will be updated along with the training repository code and will provide long-term support.
 
+## Agent integration (simulation first)
+
+This fork pins a typed, safety-gated skill API in the `src/inference`
+submodule for the separate
+[`roboparty-agent`](https://github.com/PunthiraChin/roboparty-agent) project.
+The agent may request semantic skills such as `sawasdee` and publish bounded
+external velocity commands; it does not receive a raw joint or torque API.
+
+The current agent implementation is deliberately limited to deterministic
+simulation and recorded RGB-D replay. Live camera input, the ROS adapter, and
+physical-robot activation remain separate supervised gates. See
+[`src/inference/robots/rpo/SAWASDEE.md`](src/inference/robots/rpo/SAWASDEE.md)
+for the interface and offline validation commands. Do not treat a successful
+build or simulation run as authorization to energize the robot.
+
 ## Controller Connection
 
 The deployment framework has been fully verified on **Orange Pi 5 Plus** and **RDK X5**.
