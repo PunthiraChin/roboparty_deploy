@@ -40,29 +40,165 @@ validate_name() {
     fi
 }
 
+# Parse the literal shell-style assignment without sourcing the configuration.
+# Sourcing would let a writable config execute commands as root. shlex matches
+# quotes and inline comments while deliberately rejecting substitutions.
+read_ap_passphrase() {
+    python3 - "$1" <<'PY'
+import re
+import shlex
+import sys
+from pathlib import Path
+
+assignments = []
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if line.startswith("export "):
+        line = line[7:].lstrip()
+    match = re.fullmatch(r"PASSPHRASE\s*=\s*(.*)", line)
+    if match is None:
+        continue
+    rhs = match.group(1)
+    if "$" in rhs or "`" in rhs:
+        raise SystemExit(2)
+    lexer = shlex.shlex(rhs, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    tokens = list(lexer)
+    if len(tokens) != 1:
+        raise SystemExit(2)
+    assignments.append(tokens[0])
+
+if not assignments:
+    raise SystemExit(3)
+sys.stdout.write(assignments[-1])
+PY
+}
+
+# systemctl serializes ExecStart as metadata plus the command argv. Require the
+# pinned service's exact, single "--config /etc/create_ap.conf" argument. A
+# substring check would incorrectly accept paths such as create_ap.conf.evil.
+service_uses_canonical_ap_config() {
+    python3 - "$1" <<'PY'
+import re
+import sys
+
+exec_start = sys.argv[1]
+config_flags = re.findall(r"(?<!\S)--config(?=\s|=)", exec_start)
+canonical_args = re.findall(
+    r"(?<!\S)--config\s+/etc/create_ap\.conf(?=\s|[;}]|$)",
+    exec_start,
+)
+raise SystemExit(0 if len(config_flags) == 1 and len(canonical_args) == 1 else 1)
+PY
+}
+
+process_belongs_to_cgroup() {
+    local cgroup_file=$1
+    local expected_cgroup=$2
+
+    [ -r "$cgroup_file" ] && awk -F: -v expected="$expected_cgroup" '
+        $3 == expected || index($3, expected "/") == 1 { found=1 }
+        END { exit !found }
+    ' "$cgroup_file"
+}
+
 # The ROS 2 graph exposes motor-control services to every participant on the
-# DDS network. Refuse to start the runtime when the bundled public AP password
-# is active, or when the configured passphrase is too short to be a reasonable
-# network boundary. This check never prints the passphrase.
+# DDS network. Validate the canonical AP config before every robot start, even
+# while its managed service is stopped, so it cannot be enabled insecurely
+# after the robot is running. If an AP is detected without that config, fail
+# closed. This check never prints the passphrase.
 validate_ap_security() {
-    if ! command -v systemctl >/dev/null 2>&1 || \
-       ! systemctl is-active --quiet create_ap.service; then
-        return 0
+    local ap_config="/etc/create_ap.conf"
+    local managed_ap_active=0
+    local ap_runtime_detected=0
+    local detection_available=0
+    local service_cgroup=""
+    local ap_process_pids=""
+    local ap_interface_count=0
+
+    if command -v systemctl >/dev/null 2>&1; then
+        detection_available=1
+        if systemctl is-active --quiet create_ap.service; then
+            local service_command
+            if ! service_command=$(systemctl show --property=ExecStart --value create_ap.service) || \
+               ! service_uses_canonical_ap_config "$service_command"; then
+                print_error "运行中的 create_ap.service 未绑定固定配置: $ap_config"
+                print_error "拒绝启动机器人运行时。"
+                exit 1
+            fi
+            if ! service_cgroup=$(systemctl show --property=ControlGroup --value create_ap.service) || \
+               [[ "$service_cgroup" != /* ]]; then
+                print_error "无法确认 create_ap.service 的进程边界；拒绝启动机器人运行时。"
+                exit 1
+            fi
+            managed_ap_active=1
+        fi
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        detection_available=1
+        ap_process_pids=$(
+            {
+                pgrep -x hostapd 2>/dev/null || true
+                pgrep -f '(^|/)create_ap([[:space:]]|$)' 2>/dev/null || true
+            } | awk '!seen[$1]++'
+        )
+        if [ -n "$ap_process_pids" ]; then
+            ap_runtime_detected=1
+        fi
+    fi
+    if command -v iw >/dev/null 2>&1; then
+        detection_available=1
+        ap_interface_count=$(iw dev 2>/dev/null | awk '
+            $1 == "type" && $2 == "AP" { count++ }
+            END { print count + 0 }
+        ')
+        if [ "$ap_interface_count" -gt 0 ]; then
+            ap_runtime_detected=1
+        fi
     fi
 
-    local ap_config="${CREATE_AP_CONFIG_PATH:-/etc/create_ap.conf}"
+    if [ "$ap_runtime_detected" -eq 1 ] && [ "$managed_ap_active" -ne 1 ]; then
+        print_error "检测到未由 create_ap.service 管理的热点；无法证明其使用固定安全配置。"
+        print_error "拒绝启动机器人运行时。"
+        exit 1
+    fi
+
+    if [ "$managed_ap_active" -eq 1 ]; then
+        local ap_pid
+        for ap_pid in $ap_process_pids; do
+            if ! process_belongs_to_cgroup "/proc/$ap_pid/cgroup" "$service_cgroup"; then
+                print_error "检测到 create_ap.service 之外的热点进程 (PID $ap_pid)。"
+                print_error "拒绝启动机器人运行时。"
+                exit 1
+            fi
+        done
+        if [ "$ap_interface_count" -gt 1 ]; then
+            print_error "检测到多个热点接口；无法证明它们全部由固定服务管理。"
+            print_error "拒绝启动机器人运行时。"
+            exit 1
+        fi
+    fi
+
+    if [ ! -e "$ap_config" ]; then
+        if [ "$managed_ap_active" -eq 1 ] || [ "$detection_available" -eq 0 ]; then
+            print_error "检测到热点或无法确认网络状态，但缺少热点配置: $ap_config"
+            print_error "拒绝启动机器人运行时。"
+            exit 1
+        fi
+        return 0
+    fi
     if [ ! -r "$ap_config" ]; then
-        print_error "create_ap 正在运行，但无法读取热点配置: $ap_config"
+        print_error "无法读取热点配置: $ap_config"
         print_error "请先设置每台机器人唯一的强密码，再启动机器人运行时。"
         exit 1
     fi
 
     local passphrase
-    passphrase=$(sed -n 's/^[[:space:]]*PASSPHRASE[[:space:]]*=[[:space:]]*//p' "$ap_config" | tail -n 1)
-    passphrase="${passphrase#\"}"
-    passphrase="${passphrase%\"}"
-    passphrase="${passphrase#\'}"
-    passphrase="${passphrase%\'}"
+    if ! passphrase=$(read_ap_passphrase "$ap_config"); then
+        print_error "无法安全解析热点密码配置；拒绝启动机器人运行时。"
+        exit 1
+    fi
 
     if [ -z "$passphrase" ] || [ "$passphrase" = "jujujuju" ] || [ "${#passphrase}" -lt 16 ]; then
         print_error "检测到公开默认或过短的热点密码；拒绝启动机器人运行时。"
@@ -70,7 +206,7 @@ validate_ap_security() {
         exit 1
     fi
 
-    print_success "热点安全检查通过（未显示密码）。"
+    print_success "热点配置安全检查通过（未显示密码）。"
 }
 
 # This launcher is the normal physical-robot path, so it only accepts complete

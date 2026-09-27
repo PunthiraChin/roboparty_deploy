@@ -161,9 +161,11 @@ To facilitate debugging without an Ethernet cable and monitor, a WiFi Access Poi
    >
    > ROS 2 DDS discovery and the motor-control services are not authenticated by
    > this setup. Treat the AP as a trusted, isolated control network and share
-   > its passphrase only with robot operators. `tools/start_robot.sh` refuses to
-   > start while the AP is active with the public default or a passphrase shorter
-   > than 16 characters.
+   > its passphrase only with robot operators. Before every start,
+   > `tools/start_robot.sh` safely parses the canonical `/etc/create_ap.conf` and
+   > rejects the public default or a passphrase shorter than 16 characters. It
+   > also fails closed if an AP is detected outside the pinned
+   > `create_ap.service`, or if that service is not bound to the canonical config.
 
 4. Enable autostart on boot and start the hotspot immediately:
 
