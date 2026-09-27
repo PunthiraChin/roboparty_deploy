@@ -329,7 +329,19 @@ If you need to switch to a different policy model, pass the `policy` argument. I
 ./tools/start_robot.sh --robot rpo --policy getup
 ./tools/start_robot.sh --robot rpo --policy interrupt
 ./tools/start_robot.sh --robot rpo --policy parkour
+./tools/start_robot.sh --robot rpo --policy sawasdee
 ```
+
+The `sawasdee` configuration pairs the stock locomotion controller with the
+trained knee-bend Sawasdee policy. Before using robot hardware, validate the
+policy and motion bundle offline:
+
+```bash
+python3 src/inference/tools/validate_motion_policy.py
+```
+
+See `src/inference/robots/rpo/SAWASDEE.md` for the runtime contract, gamepad
+flow, and the safety boundary for future autonomous skill selection.
 
 `parkour` depends on the `/depth_obs` observation. Before starting robot inference, launch RealSense and depth processing in another terminal:
 
